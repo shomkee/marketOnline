@@ -1,0 +1,158 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Дизайн-токены: светлая и тёмная темы */
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 243 75% 59%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 243 75% 96%;
+    --accent-foreground: 243 75% 40%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 243 75% 59%;
+
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 222 47% 7%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 44% 10%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 44% 10%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 243 75% 66%;
+    --primary-foreground: 222 47% 8%;
+
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 217 33% 20%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 63% 50%;
+    --destructive-foreground: 210 40% 98%;
+
+    --success: 142 65% 45%;
+    --success-foreground: 222 47% 8%;
+
+    --border: 217 33% 20%;
+    --input: 217 33% 20%;
+    --ring: 243 75% 66%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+  }
+
+  /* Мягкий скроллбар */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-border;
+  }
+}
+
+@layer components {
+  /* Градиентный фон hero-блока */
+  .hero-gradient {
+    background-image:
+      radial-gradient(ellipse 80% 60% at 50% -20%, hsl(var(--primary) / 0.25), transparent),
+      radial-gradient(ellipse 60% 50% at 100% 0%, hsl(var(--primary) / 0.12), transparent);
+  }
+
+  /* Skeleton-загрузка */
+  .shimmer {
+    @apply relative overflow-hidden bg-muted;
+  }
+
+  .shimmer::after {
+    @apply absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/10 to-transparent;
+    content: '';
+  }
+
+  /* Оформление markdown-описания товара */
+  .markdown-body {
+    @apply space-y-4 text-sm leading-relaxed text-muted-foreground;
+  }
+
+  .markdown-body h1,
+  .markdown-body h2,
+  .markdown-body h3 {
+    @apply font-semibold text-foreground;
+  }
+
+  .markdown-body h1 {
+    @apply text-xl;
+  }
+
+  .markdown-body h2 {
+    @apply text-lg;
+  }
+
+  .markdown-body ul {
+    @apply list-disc space-y-1 pl-5;
+  }
+
+  .markdown-body ol {
+    @apply list-decimal space-y-1 pl-5;
+  }
+
+  .markdown-body a {
+    @apply font-medium text-primary underline underline-offset-4;
+  }
+
+  .markdown-body code {
+    @apply rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground;
+  }
+
+  .markdown-body table {
+    @apply w-full border-collapse text-left;
+  }
+
+  .markdown-body th,
+  .markdown-body td {
+    @apply border border-border px-3 py-2;
+  }
+}

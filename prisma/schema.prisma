@@ -1,0 +1,501 @@
+// ============================================================
+//  Магазин цифровых товаров с автовыдачей — схема БД
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ==================== ПЕРЕЧИСЛЕНИЯ ====================
+
+/// Роль пользователя админ-панели
+enum UserRole {
+  ADMIN
+  MANAGER
+}
+
+/// Тип цифрового товара — определяет способ автовыдачи
+enum ProductType {
+  KEY
+  FILE
+  LINK
+}
+
+/// Жизненный цикл одного ключа на складе
+enum KeyStatus {
+  AVAILABLE
+  RESERVED
+  SOLD
+  DISABLED
+}
+
+/// Статус заказа
+enum OrderStatus {
+  PENDING
+  PAID
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+/// Статус платежа у провайдера
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  EXPIRED
+  REFUNDED
+}
+
+/// Код платёжного провайдера
+enum PaymentProviderCode {
+  CRYPTOBOT
+  YOOKASSA
+}
+
+/// Тип скидки промокода
+enum DiscountType {
+  PERCENT
+  FIXED
+}
+
+/// Статус модерации отзыва
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Результат обработки входящего webhook'а
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  DUPLICATE
+  INVALID_SIGN
+  FAILED
+}
+
+// ==================== ПОЛЬЗОВАТЕЛИ ====================
+
+/// Администратор магазина. Покупатели НЕ регистрируются.
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  /// bcrypt-хеш пароля, cost = 12
+  passwordHash String
+  name         String?
+  role         UserRole  @default(ADMIN)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  manualDeliveries Order[]      @relation("OrderDeliveredBy")
+  moderatedReviews Review[]     @relation("ReviewModeratedBy")
+  importedKeys     ProductKey[] @relation("KeyImportedBy")
+
+  @@index([email])
+  @@map("users")
+}
+
+// ==================== КАТАЛОГ ====================
+
+/// Категория товаров с поддержкой вложенности
+model Category {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String?
+  /// Emoji или имя иконки lucide
+  icon        String?
+  imageUrl    String?
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+
+  parentId String?
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryTree")
+
+  products Product[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+  @@index([parentId])
+  @@index([isActive, sortOrder])
+  @@map("categories")
+}
+
+/// Товар магазина
+model Product {
+  id               String      @id @default(cuid())
+  slug             String      @unique
+  name             String
+  shortDescription String?
+  /// Полное описание в markdown
+  description      String      @db.Text
+  type             ProductType
+
+  /// Цена в минорных единицах (копейках). Деньги никогда не хранятся во float.
+  price    Int
+  oldPrice Int?
+  currency String @default("RUB")
+
+  /// URL изображений; первый — обложка
+  images String[] @default([])
+
+  /// FILE: ключ объекта в S3 (никогда не отдаётся клиенту)
+  fileKey     String?
+  fileName    String?
+  fileSize    Int?
+  /// LINK: ссылка или markdown-инструкция, выдаваемая после оплаты
+  linkContent String? @db.Text
+
+  lowStockThreshold Int @default(5)
+  maxPerOrder       Int @default(10)
+
+  isActive   Boolean @default(true)
+  isFeatured Boolean @default(false)
+
+  /// Денормализованные счётчики для быстрой сортировки витрины
+  salesCount  Int   @default(0)
+  rating      Float @default(0)
+  reviewCount Int   @default(0)
+
+  metaTitle       String?
+  metaDescription String?
+
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  keys       ProductKey[]
+  orderItems OrderItem[]
+  reviews    Review[]
+  promocodes Promocode[]  @relation("PromocodeProducts")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+  @@index([categoryId])
+  @@index([isActive, isFeatured])
+  @@index([isActive, salesCount(sort: Desc)])
+  @@index([isActive, price])
+  @@index([isActive, createdAt(sort: Desc)])
+  @@map("products")
+}
+
+// ==================== СКЛАД КЛЮЧЕЙ ====================
+
+/// Одна единица товара типа KEY
+model ProductKey {
+  id     String    @id @default(cuid())
+  /// Содержимое ключа, зашифровано AES-256-GCM на уровне приложения
+  value  String    @db.Text
+  /// Хеш открытого значения — позволяет ловить дубли без расшифровки
+  valueHash String
+  status KeyStatus @default(AVAILABLE)
+  note   String?
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// До какого момента ключ держится в резерве
+  reservedUntil DateTime?
+
+  orderItemId String?
+  orderItem   OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+
+  soldAt DateTime?
+
+  importedById String?
+  importedBy   User?   @relation("KeyImportedBy", fields: [importedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Защита от повторного импорта одного и того же ключа
+  @@unique([productId, valueHash])
+  @@index([productId, status])
+  @@index([status, reservedUntil])
+  @@index([orderItemId])
+  @@map("product_keys")
+}
+
+// ==================== ЗАКАЗЫ ====================
+
+/// Заказ покупателя. Покупатель анонимен, идентифицируется email'ом.
+model Order {
+  id          String @id @default(cuid())
+  /// Человекочитаемый номер: ORD-000001
+  orderNumber String @unique
+  /// Секретный токен доступа: /order/{publicToken}
+  publicToken String @unique
+
+  email  String
+  status OrderStatus @default(PENDING)
+
+  subtotal       Int
+  discountAmount Int    @default(0)
+  total          Int
+  currency       String @default("RUB")
+
+  promocodeId   String?
+  promocode     Promocode? @relation(fields: [promocodeId], references: [id], onDelete: SetNull)
+  /// Копия кода на момент заказа
+  promocodeCode String?
+
+  items    OrderItem[]
+  payments Payment[]
+  reviews  Review[]
+
+  paidAt      DateTime?
+  deliveredAt DateTime?
+  cancelledAt DateTime?
+  refundedAt  DateTime?
+  /// Когда истекает бронь ключей
+  expiresAt   DateTime
+
+  emailSentAt      DateTime?
+  emailResendCount Int       @default(0)
+
+  deliveredById String?
+  deliveredBy   User?   @relation("OrderDeliveredBy", fields: [deliveredById], references: [id], onDelete: SetNull)
+  adminNote     String?
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([publicToken])
+  @@index([email])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([status, expiresAt])
+  @@index([createdAt(sort: Desc)])
+  @@map("orders")
+}
+
+/// Позиция заказа со снимком товара на момент покупки
+model OrderItem {
+  id         String @id @default(cuid())
+  quantity   Int    @default(1)
+  unitPrice  Int
+  totalPrice Int
+
+  productName String
+  productType ProductType
+
+  /// Итоговый выданный контент для типов FILE и LINK
+  deliveredContent String? @db.Text
+  deliveredFileKey String?
+  downloadCount    Int     @default(0)
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// Товар мог быть удалён — позиция заказа обязана сохраниться
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  keys ProductKey[]
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+// ==================== ПЛАТЕЖИ ====================
+
+/// Попытка оплаты заказа через конкретного провайдера
+model Payment {
+  id       String              @id @default(cuid())
+  provider PaymentProviderCode
+  status   PaymentStatus       @default(PENDING)
+
+  /// ID инвойса на стороне провайдера
+  externalId String
+  payUrl     String? @db.Text
+
+  amount   Int
+  currency String @default("RUB")
+
+  paidAmount   Int?
+  paidCurrency String?
+
+  rawCreateResponse Json?
+  rawWebhookPayload Json?
+
+  errorCode    String?
+  errorMessage String?
+
+  paidAt     DateTime?
+  expiresAt  DateTime?
+  refundedAt DateTime?
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Ключевое ограничение идемпотентности
+  @@unique([provider, externalId])
+  @@index([orderId])
+  @@index([status])
+  @@map("payments")
+}
+
+// ==================== ПРОМОКОДЫ ====================
+
+model Promocode {
+  id   String @id @default(cuid())
+  code String @unique
+
+  discountType  DiscountType
+  /// Для PERCENT — 1..100. Для FIXED — сумма в копейках.
+  discountValue Int
+
+  minOrderAmount Int?
+  maxDiscount    Int?
+
+  usageLimit    Int?
+  usedCount     Int  @default(0)
+  perEmailLimit Int? @default(1)
+
+  validFrom  DateTime  @default(now())
+  validUntil DateTime?
+
+  isActive Boolean @default(true)
+
+  /// Если список непуст — промокод действует только на эти товары
+  products Product[] @relation("PromocodeProducts")
+  orders   Order[]
+
+  description String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([code])
+  @@index([isActive, validUntil])
+  @@map("promocodes")
+}
+
+// ==================== ОТЗЫВЫ ====================
+
+model Review {
+  id         String       @id @default(cuid())
+  rating     Int
+  authorName String
+  email      String
+  comment    String       @db.Text
+  status     ReviewStatus @default(PENDING)
+
+  adminReply   String?   @db.Text
+  adminReplyAt DateTime?
+
+  moderatedById String?
+  moderatedBy   User?     @relation("ReviewModeratedBy", fields: [moderatedById], references: [id], onDelete: SetNull)
+  moderatedAt   DateTime?
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, productId])
+  @@index([productId, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("reviews")
+}
+
+// ==================== ЛОГИ WEBHOOK'ОВ ====================
+
+/// Журнал всех входящих webhook'ов. Пишется ДО проверки подписи.
+model WebhookLog {
+  id       String              @id @default(cuid())
+  provider PaymentProviderCode
+  status   WebhookStatus       @default(RECEIVED)
+
+  eventId    String?
+  eventType  String?
+  externalId String?
+
+  payload   Json
+  headers   Json?
+  ipAddress String?
+
+  signatureValid Boolean?
+  error          String?  @db.Text
+  processingMs   Int?
+
+  /// Без FK: журнал должен переживать удаление заказов
+  orderId String?
+
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  @@unique([provider, eventId])
+  @@index([provider, createdAt(sort: Desc)])
+  @@index([status])
+  @@index([externalId])
+  @@map("webhook_logs")
+}
+
+// ==================== НАСТРОЙКИ ====================
+
+/// Синглтон-строка настроек. Всегда ровно одна запись с id = "singleton".
+model Settings {
+  id String @id @default("singleton")
+
+  shopName        String  @default("Digital Store")
+  shopDescription String?
+  logoUrl         String?
+  faviconUrl      String?
+  currency        String  @default("RUB")
+
+  contactEmail     String?
+  telegramUsername String?
+  supportUrl       String?
+
+  metaTitle       String?
+  metaDescription String?
+  ogImageUrl      String?
+
+  cryptobotEnabled Boolean @default(false)
+  /// Зашифрован AES-256-GCM. Приоритет у переменной окружения.
+  cryptobotToken   String?
+
+  yookassaEnabled   Boolean @default(false)
+  yookassaShopId    String?
+  yookassaSecretKey String?
+
+  emailFrom        String?
+  adminNotifyEmail String?
+
+  reservationMinutes Int     @default(15)
+  downloadTtlSeconds Int     @default(300)
+  maxEmailResends    Int     @default(5)
+  reviewsModerated   Boolean @default(true)
+  maintenanceMode    Boolean @default(false)
+  maintenanceMessage String?
+
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}
